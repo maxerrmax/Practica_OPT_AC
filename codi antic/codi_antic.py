@@ -41,27 +41,20 @@ def get_rule_table(rule_number: int) -> dict:
     return rule_table
 
 
-def get_neighborhood(state: np.ndarray, i: int) -> tuple:
-    """
-    Retorna el veïnat (esquerra, centre, dreta) de la cel·la i.
-    Condició frontera: PERIÒDICA (toroïdal).
-    """
-    n = len(state)
-    return state[(i - 1) % n], state[i], state[(i + 1) % n]
-
-
 def evolve_step(state: np.ndarray, rule_table: dict) -> np.ndarray:
     """
     Calcula la generació següent d'un estat donada una taula de regles.
-    Usa get_neighborhood per obtenir el veïnat de cada cel·la.
+    Condició frontera: PERIÒDICA (toroïdal).
     """
     n = len(state)
     new_state = np.zeros(n, dtype=int)
-
+    
     for i in range(n):
-        neighborhood = get_neighborhood(state, i)
-        new_state[i] = rule_table[neighborhood]
-
+        left   = state[(i - 1) % n]   # periòdic per l'esquerra
+        center = state[i]
+        right  = state[(i + 1) % n]   # periòdic per la dreta
+        new_state[i] = rule_table[(left, center, right)]
+    
     return new_state
 
 
@@ -69,13 +62,13 @@ def run_automaton(rule_number: int, width: int = 101, generations: int = 50,
                   initial_state: np.ndarray = None) -> np.ndarray:
     """
     Executa l'autòmat cel·lular elemental de Wolfram.
-
+    
     Paràmetres:
         rule_number   : regla de Wolfram (0-255)
         width         : nombre de cel·les
         generations   : nombre de generacions a simular
         initial_state : estat inicial (si None, una sola cel·la central encesa)
-
+    
     Retorna:
         Matriu 2D [generations+1 x width] amb l'evolució completa.
     """
@@ -106,7 +99,7 @@ def coarse_grain(history: np.ndarray, k: int = 2) -> np.ndarray:
     Aplica un gra gruixut de factor K=2 sobre l'evolució temporal.
     Cada bloc de K cel·les contigues s'agrupa en una de sola:
       - Valor del bloc = 1 si la majoria de les K cel·les valen 1, 0 altrament.
-
+    
     Retorna una matriu de dimensions [generations x (width//k)].
     """
     gens, width = history.shape
@@ -119,94 +112,6 @@ def coarse_grain(history: np.ndarray, k: int = 2) -> np.ndarray:
             coarse[g, i] = 1 if np.sum(bloc) >= k / 2 else 0
     
     return coarse
-
-
-# ─────────────────────────────────────────────
-# 2B. REGLA FORMAL DEL CA GRUIXUT
-# ─────────────────────────────────────────────
-
-def majority(bloc: list) -> int:
-    """Regla de majoria: retorna 1 si més de la meitat de les cel·les valen 1."""
-    return 1 if sum(bloc) > len(bloc) / 2 else 0
-
-
-def build_coarse_rule(rule_number: int, k: int = 2) -> dict:
-    """
-    Construeix la taula de transició formal del CA de gra gruixut.
-
-    Segueix el següent procediment:
-      Per cada combinació de 3 supracel·les (s_left, s_center, s_right) ∈ {0,1}^3:
-        1. Expandeix cada supracel·la al seu bloc canònic: 0→[0,0,...], 1→[1,1,...]
-        2. Aplica la regla original 1 pas sobre el context complet de 3k cel·les,
-           amb padding fix als extrems (s_left i s_right) per simular continuïtat.
-        3. Projecta el bloc central resultant a {0,1} amb la regla de majoria.
-
-    Retorna un diccionari {(s_esq, s_cen, s_dre): nou_estat_supracel·la}.
-    """
-    rule_table = get_rule_table(rule_number)
-
-    coarse_rule = {}
-
-    for s_left in range(2):
-        for s_center in range(2):
-            for s_right in range(2):
-
-                # Bloc canònic: supracel·la s → k repeticions de s
-                bl = [s_left]   * k
-                bc = [s_center] * k
-                br = [s_right]  * k
-
-                # Context complet amb padding fix als extrems
-                padded = np.array([s_left] + bl + bc + br + [s_right], dtype=int)
-                # índexs del bloc central dins padded: 1+k .. 1+2k
-                c_start = 1 + k
-                c_end   = 1 + 2 * k
-
-                # Un sol pas de la regla original sobre totes les cel·les del context
-                new_padded = padded.copy()
-                for i in range(1, len(padded) - 1):
-                    new_padded[i] = rule_table[(padded[i-1], padded[i], padded[i+1])]
-
-                # Bloc central resultant i projecció per majoria
-                new_center = list(new_padded[c_start:c_end])
-                coarse_rule[(s_left, s_center, s_right)] = majority(new_center)
-
-    return coarse_rule
-
-
-def run_coarse_automaton(rule_number: int, width: int = 100, generations: int = 50,
-                         k: int = 2) -> np.ndarray:
-    """
-    Simula el CA de gra gruixut usant la regla formal derivada.
-
-    Parteix del mateix estat inicial que el CA original (supracel·la central encesa)
-    i evoluciona amb la taula de transició construïda a build_coarse_rule.
-    Reutilitza evolve_step, ja que la interfície és idèntica.
-    Usa frontera FIXA a 0 als extrems per evitar artefactes de la frontera periòdica
-    amb amplades petites.
-
-    Retorna una matriu 2D [generations+1 x (width//k)].
-    """
-    coarse_rule = build_coarse_rule(rule_number, k)
-    n_super = width // k
-
-    state = np.zeros(n_super, dtype=int)
-    state[n_super // 2] = 1
-
-    history = [state.copy()]
-
-    for _ in range(generations):
-        # Usem frontera fixa (0) en lloc de periòdica per a la regla formal
-        new_state = np.zeros(n_super, dtype=int)
-        for i in range(n_super):
-            l = state[i - 1] if i > 0 else 0          # frontera fixa esquerra
-            c = state[i]
-            r = state[i + 1] if i < n_super - 1 else 0  # frontera fixa dreta
-            new_state[i] = coarse_rule[(l, c, r)]
-        state = new_state
-        history.append(state.copy())
-
-    return np.array(history)
 
 
 # ─────────────────────────────────────────────
@@ -251,6 +156,7 @@ def plot_coarse_comparison(rule_number: int, width: int = 100, generations: int 
     
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, f'rule_{rule_number}_coarse_k{k}.png'), dpi=150, bbox_inches='tight')
+
     plt.show()
     print(f"[✓] Comparació guardada: rule_{rule_number}_coarse_k{k}.png")
 
@@ -313,7 +219,6 @@ def plot_combined_rules(rule_list: list, width: int = 101, generations: int = 50
     print(f"[✓] Combinació guardada: combined_rules_{label}.png")
 
 
-
 # ─────────────────────────────────────────────
 # 4. EXECUCIÓ PRINCIPAL
 # ─────────────────────────────────────────────
@@ -352,7 +257,7 @@ if __name__ == '__main__':
     # --- G) Combinació de regles (alternant 30 i 90)
     print("\n[7] Combinació de regles 30 i 90 (alternant)...")
     plot_combined_rules([30, 90], width=101, generations=50)
-
+    
     print("\n[✓] Totes les figures han estat generades correctament.")
     print("    Fitxers de sortida:")
     print("    - rule_30.png")
