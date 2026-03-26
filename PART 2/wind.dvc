@@ -1,0 +1,13 @@
+file title  : Wind layer
+data type   : integer
+file type   : ascii
+object type : polygon
+ref. system : plane
+ref. units  : m
+unit dist.  : 30
+min. X      : 0
+max. X      : 600
+min. Y      : 0
+max. Y      : 600
+pos'n error : unknown
+resolution  : unknown
