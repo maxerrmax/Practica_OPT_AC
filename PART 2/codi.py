@@ -126,8 +126,8 @@ def coarse_grain(history: np.ndarray, k: int = 2) -> np.ndarray:
 # ─────────────────────────────────────────────
 
 def majority(bloc: list) -> int:
-    """Regla de majoria: retorna 1 si més de la meitat de les cel·les valen 1."""
-    return 1 if sum(bloc) > len(bloc) / 2 else 0
+    """Regla de majoria: retorna 1 si la meitat o més de les cel·les valen 1."""
+    return 1 if sum(bloc) >= len(bloc) / 2 else 0
 
 
 def build_coarse_rule(rule_number: int, k: int = 2) -> dict:
@@ -230,13 +230,18 @@ def plot_single_rule(rule_number: int, width: int = 101, generations: int = 50):
 
 def plot_coarse_comparison(rule_number: int, width: int = 100, generations: int = 50, k: int = 2):
     """
-    Compara l'evolució original amb la versió de gra gruixut K=2.
+    Compara l'evolució original amb la versió de gra gruixut (posteriori)
+    i la versió obtinguda directament per la regla formal.
     """
+    # 1. Original
     history = run_automaton(rule_number, width, generations)
+    # 2. Gra gruixut a posteriori
     coarse  = coarse_grain(history, k)
+    # 3. Gra gruixut amb regla formal
+    formal_coarse = run_coarse_automaton(rule_number, width, generations, k)
     
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    fig.suptitle(f'Regla {rule_number}: Original vs Gra Gruixut (K={k})', 
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(f'Regla {rule_number}: Original vs Gruixut Posterior vs Formal (K={k})', 
                  fontsize=14, fontweight='bold')
     
     axes[0].imshow(history, cmap='binary', interpolation='nearest', aspect='auto')
@@ -245,14 +250,19 @@ def plot_coarse_comparison(rule_number: int, width: int = 100, generations: int 
     axes[0].set_ylabel('Generació')
     
     axes[1].imshow(coarse, cmap='binary', interpolation='nearest', aspect='auto')
-    axes[1].set_title(f'Gra Gruixut K={k} ({width//k} cel·les)')
-    axes[1].set_xlabel('Cel·la (agrupada)')
+    axes[1].set_title(f'Gra Gruixut a posterior ({width//k} cel·les)')
+    axes[1].set_xlabel('Supracel·la')
     axes[1].set_ylabel('Generació')
     
+    axes[2].imshow(formal_coarse, cmap='binary', interpolation='nearest', aspect='auto')
+    axes[2].set_title(f'Regla Formal directa ({width//k} cel·les)')
+    axes[2].set_xlabel('Supracel·la')
+    axes[2].set_ylabel('Generació')
+    
     plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, f'rule_{rule_number}_coarse_k{k}.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(OUTPUT_DIR, f'rule_{rule_number}_coarse_full_k{k}.png'), dpi=150, bbox_inches='tight')
     plt.show()
-    print(f"[✓] Comparació guardada: rule_{rule_number}_coarse_k{k}.png")
+    print(f"[✓] Comparació completa guardada: rule_{rule_number}_coarse_full_k{k}.png")
 
 
 def plot_multiple_rules(rules: list, width: int = 101, generations: int = 40):
@@ -358,7 +368,7 @@ if __name__ == '__main__':
     print("    - rule_30.png")
     print("    - rule_110.png")
     print("    - rule_90.png")
-    print("    - rule_30_coarse_k2.png")
-    print("    - rule_90_coarse_k2.png")
+    print("    - rule_30_coarse_full_k2.png")
+    print("    - rule_90_coarse_full_k2.png")
     print("    - multiple_rules.png")
     print("    - combined_rules_30+90.png")

@@ -696,7 +696,7 @@ def plot_wind_diagnostics(ca: WildfireCA,
     gy = np.linspace(0, rows - 1, 8)
     xx, yy = np.meshgrid(gx, gy)
     u = np.full_like(xx, ca.wind_vector[0], dtype=float)
-    v = np.full_like(yy, ca.wind_vector[1], dtype=float)
+    v = np.full_like(yy, -ca.wind_vector[1], dtype=float) # Invertim la Y visual per quadrar amb l'eix de la imatge
     ax1.quiver(xx, yy, u, v, color='black', alpha=0.75, scale=12)
 
     # ── 2) Pes direccional per a les 8 direccions de Moore ───────────
