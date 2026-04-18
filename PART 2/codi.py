@@ -9,7 +9,6 @@ Condició frontera: periòdica (els extrems es connecten entre si).
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import os
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
@@ -31,7 +30,7 @@ def get_rule_table(rule_number: int) -> dict:
     bits = format(rule_number, '08b')  # 8 bits, p.ex. "00011110" per regla 30
     rule_table = {}
     
-    # Els 8 patrons possibles (111, 110, ..., 000) mapeats als bits de la regla
+    # Els 8 patrons possibles (111, 110, ..., 000) mapejats als bits de la regla
     for i, pattern in enumerate(range(7, -1, -1)):
         left   = (pattern >> 2) & 1
         center = (pattern >> 1) & 1
@@ -53,7 +52,7 @@ def get_neighborhood(state: np.ndarray, i: int) -> tuple:
 def evolve_step(state: np.ndarray, rule_table: dict) -> np.ndarray:
     """
     Calcula la generació següent d'un estat donada una taula de regles.
-    Usa get_neighborhood per obtenir el veïnat de cada cel·la.
+    Utilitza get_neighborhood per obtenir el veïnat de cada cel·la.
     """
     n = len(state)
     new_state = np.zeros(n, dtype=int)
@@ -98,13 +97,15 @@ def run_automaton(rule_number: int, width: int = 101, generations: int = 50,
 
 
 # ─────────────────────────────────────────────
-# 2. GRA GRUIXUT (COARSE-GRAINING) K=2
+# 2. GRA GRUIXUT (COARSE-GRAINING)
 # ─────────────────────────────────────────────
 
 def coarse_grain(history: np.ndarray, k: int = 2) -> np.ndarray:
     """
-    Aplica un gra gruixut de factor K=2 sobre l'evolució temporal.
-    Cada bloc de K cel·les contigues s'agrupa en una de sola:
+    Aplica un gra gruixut de factor K a posteriori sobre l'evolució temporal
+    d'un CA original prèviament simulat amb run_automaton.
+    
+    Cada bloc de K cel·les contigües s'agrupa matemàticament en una de sola:
       - Valor del bloc = 1 si la majoria de les K cel·les valen 1, 0 altrament.
 
     Retorna una matriu de dimensions [generations x (width//k)].
@@ -122,7 +123,7 @@ def coarse_grain(history: np.ndarray, k: int = 2) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────
-# 2B. REGLA FORMAL DEL CA GRUIXUT
+# 3. REGLA FORMAL DEL CA DE GRA GRUIXUT
 # ─────────────────────────────────────────────
 
 def majority(bloc: list) -> int:
@@ -151,18 +152,21 @@ def build_coarse_rule(rule_number: int, k: int = 2) -> dict:
         for s_center in range(2):
             for s_right in range(2):
 
-                # Bloc canònic: supracel·la s → k repeticions de s
+                # Traduïm cada estat de supracel·la {0,1} a un bloc físic de K cel·les elementals iguals.
                 bl = [s_left]   * k
                 bc = [s_center] * k
                 br = [s_right]  * k
 
-                # Context complet amb padding fix als extrems
+                # Construïm el context complet d'avaluació. Afegim 1 cel·la extra de "padding" 
+                # a cada extrem per permetre calcular correctament l'evolució de les vores dels blocs.
                 padded = np.array([s_left] + bl + bc + br + [s_right], dtype=int)
-                # índexs del bloc central dins padded: 1+k .. 1+2k
+                
+                # Identifiquem els índexs del nostre bloc central dins l'array 'padded'.
+                # Comença un cop passats el padding (1) i el bloc complet esquerre (k).
                 c_start = 1 + k
                 c_end   = 1 + 2 * k
 
-                # Un sol pas de la regla original sobre totes les cel·les del context
+                # Apliquem un únic pas de la regla elemental original sobre tot el context disponible.
                 new_padded = padded.copy()
                 for i in range(1, len(padded) - 1):
                     new_padded[i] = rule_table[(padded[i-1], padded[i], padded[i+1])]
@@ -177,15 +181,12 @@ def build_coarse_rule(rule_number: int, k: int = 2) -> dict:
 def run_coarse_automaton(rule_number: int, width: int = 100, generations: int = 50,
                          k: int = 2) -> np.ndarray:
     """
-    Simula el CA de gra gruixut usant la regla formal derivada.
+    Simula completament de zero l'autòmat cel·lular de gra gruixut.
 
-    Parteix del mateix estat inicial que el CA original (supracel·la central encesa)
-    i evoluciona amb la taula de transició construïda a build_coarse_rule.
-    Reutilitza evolve_step, ja que la interfície és idèntica.
-    Usa frontera FIXA a 0 als extrems per evitar artefactes de la frontera periòdica
-    amb amplades petites.
-
-    Retorna una matriu 2D [generations+1 x (width//k)].
+    En lloc d'aplicar el filtre sobre un resultat prèviament simulat,
+    parteix d'un estat inicial reduït (una única supracel·la central encesa) i 
+    evoluciona automàticament pas a pas usant exclusivament la taula de transició 
+    formal construïda per build_coarse_rule.
     """
     coarse_rule = build_coarse_rule(rule_number, k)
     n_super = width // k
@@ -196,12 +197,11 @@ def run_coarse_automaton(rule_number: int, width: int = 100, generations: int = 
     history = [state.copy()]
 
     for _ in range(generations):
-        # Usem frontera fixa (0) en lloc de periòdica per a la regla formal
         new_state = np.zeros(n_super, dtype=int)
         for i in range(n_super):
-            l = state[i - 1] if i > 0 else 0          # frontera fixa esquerra
+            l = state[(i - 1) % n_super]
             c = state[i]
-            r = state[i + 1] if i < n_super - 1 else 0  # frontera fixa dreta
+            r = state[(i + 1) % n_super]
             new_state[i] = coarse_rule[(l, c, r)]
         state = new_state
         history.append(state.copy())
@@ -210,7 +210,7 @@ def run_coarse_automaton(rule_number: int, width: int = 100, generations: int = 
 
 
 # ─────────────────────────────────────────────
-# 3. VISUALITZACIÓ
+# 4. VISUALITZACIÓ
 # ─────────────────────────────────────────────
 
 def plot_single_rule(rule_number: int, width: int = 101, generations: int = 50):
@@ -325,11 +325,14 @@ def plot_combined_rules(rule_list: list, width: int = 101, generations: int = 50
 
 
 # ─────────────────────────────────────────────
-# 4. EXECUCIÓ PRINCIPAL
+# 5. EXECUCIÓ PRINCIPAL
 # ─────────────────────────────────────────────
 
 if __name__ == '__main__':
     
+    # A continuació es proposa un exemple de programa per veure com funciona el codi.
+    # Es pot modificar segons el que ens interessi visualitzar.
+
     print("=" * 60)
     print("  AUTÒMAT CEL·LULAR ELEMENTAL DE WOLFRAM")
     print("=" * 60)

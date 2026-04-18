@@ -1,20 +1,21 @@
 """
 Autòmat Cel·lular per a la Propagació d'Incendis Forestals
 ===========================================================
-Model m:n-CA^k (Multi-n-Dimensional Cellular Automaton) implementat
-seguint la teoria de Fonseca i Casas (UPC), tal com es defineix a
-teoria.pdf.
+Model m:n-CA^k (Multi-n-Dimensional Cellular Automaton).
 
 Notació formal:
-  - m : nombre de capes (layers)     → 3 capes: humitat, vegetació, estat
+  - m : nombre de capes (layers)     → 5 capes base (+1 capa opcional de vent)
   - n : dimensió de cada capa        → 2 (espai bidimensional ℤ²)
   - k : nombre de capes principals   → 1 (capa d'estat del foc)
-  Representació: 3:2-CA^1 sobre ℤ²
+  Representació: 5:2-CA^1 sobre ℤ²
 
 Capes del model (E_m):
   E1[x1,x2] : Humitat     — hores de protecció restants (decreix amb el temps)
   E2[x1,x2] : Vegetació   — hores de combustible restants (decreix quan crema)
-  E3[x1,x2] : Estat foc   — UNBURNED=0, BURNING=1, BURNED=2
+  E3[x1,x2] : Estat foc   — UNBURNED=0, BURNING=1, BURNED=2 (Capa principal, k=1)
+  E4[x1,x2] : Relleu      — elevació (afecta i accelera/frena la propagació)
+  E5[x1,x2] : Combustible — força de propagació del foc local
+  (Extra)   : Vent        — capa de biaix/vector obtinguda a partir de polígons
 
 Funció d'evolució Λ (només definida a la capa principal E3):
   - Veïnatge: funció de veïnatge de Moore (8-connexitat):
@@ -22,8 +23,7 @@ Funció d'evolució Λ (només definida a la capa principal E3):
   - Nucli: nc(x1,x2) = {(x1,x2)}  (una sola cel·la)
   - Condició frontera: fixa (UNBURNED als extrems)
 
-Format de dades: IDRISI32 (fitxer .doc + fitxer .img)
-Autors: Pràctica 2 - Sessió 2
+Format de dades: IDRISI32 (Raster: .doc + .img | Vectorial: .dvc + .vec)
 """
 
 import numpy as np
@@ -33,7 +33,7 @@ import matplotlib.patches as mpatches
 import os
 import sys
 
-# Reutilització mínima de la Part 1 (Wolfram): regla de majoria.
+# Reutilització de la Part 1 (Wolfram): regla de majoria.
 # Si no es pot importar (execució fora de l'estructura esperada), fem fallback.
 PART1_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PART1_DIR not in sys.path:
@@ -51,7 +51,7 @@ if wolfram is not None:
 else:
     # Fallback local si no es pot importar codi.py
     def wolfram_majority(bloc: list) -> int:
-        return 1 if sum(bloc) > len(bloc) / 2 else 0
+        return 1 if sum(bloc) >= len(bloc) / 2 else 0
 
     def wolfram_coarse_grain(history: np.ndarray, k: int = 2) -> np.ndarray:
         gens, width = history.shape
@@ -67,12 +67,12 @@ else:
 # ESTATS DEL CA  (capa principal E3)
 # ─────────────────────────────────────────────
 UNBURNED = 0   # Pendent de cremar-se
-BURNING  = 1   # En procés de cremar-se  (emet foc als veïns)
+BURNING  = 1   # Cremant-se  (emet foc als veïns)
 BURNED   = 2   # Ja cremat
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  LECTURA DE FITXERS IDRISI32
+#  LECTURA DE FITXERS IDRISI32 - CAPES TIPUS RASTER (.doc / .img)
 # ═══════════════════════════════════════════════════════════════════════
 
 def read_idrisi32_doc(filepath: str) -> dict:
@@ -113,7 +113,7 @@ def load_raster_layer(doc_path: str, img_path: str) -> tuple[np.ndarray, dict]:
     cols = int(meta.get('columns', 0))
     data = read_idrisi32_img(img_path, rows, cols)
     print(f"[✓] Capa carregada: '{meta.get('file title', '?')}' "
-          f"({rows}×{cols}), rang [{data.min():.1f}, {data.max():.1f}]")
+          f"({rows}x{cols}), rang [{data.min():.1f}, {data.max():.1f}]")
     return data, meta
 
 
@@ -165,8 +165,9 @@ def polygon_to_wind_bias(polygons: list, rows: int, cols: int,
                           y_min: float, y_max: float) -> np.ndarray:
     """
     Converteix polígons vectorials a una matriu de biaix de vent [0..1].
-    Les cel·les dins d'un polígon reben un biaix = fracció de polígons
-    que les contenen (pot ser >0 fins a 1.0).
+    Les cel·les dins d'un polígon reben un biaix. Aquest biaix es
+    calcula en funció de la fracció de polígons que les contenen (pot ser 
+    >0 fins a 1.0).
 
     El biaix s'utilitza per ampliar la probabilitat de propagació
     en la direcció preferent del vent.
@@ -229,17 +230,21 @@ def estimate_wind_vector_from_polygons(polygons: list[list[tuple[float, float]]]
 
 class WildfireCA:
     """
-    Model 3:2-CA^1 per a la propagació d'incendis forestals.
+    Model 5:2-CA^1 per a la propagació d'incendis forestals.
 
     Capes (E_m sobre ℤ²):
       humidity   (E1) : temps de protecció restant per a cada cel·la
       vegetation (E2) : combustible restant (hores de crema)
       fire_state (E3) : estat del foc — capa principal (k=1)
+      relief     (E4) : elevació (accelera/frena propagació segons pendent)
+      fuel       (E5) : combustible local (força de propagació)
+      wind_bias  (Ex) : biaix direccional de vent (capa opcional)
 
     Funció d'evolució Λ (definida per a E3):
-      Veïnatge Moore 8-connexitat.
-      Nucli: la pròpia cel·la.
-      Funció de combinació Ψ: majoria (si ≥1 veí crema → propaga).
+      Veïnatge Moore 8-connexitat amb nucli = {(x1,x2)}.
+      Funció de combinació Ψ: per a cada veí cremant, es modula la propagació 
+      per factors de vent, relleu i combustible. Quan la propagació acumulada
+      supera la humitat local de la cel·la, s'encén.
     """
 
     MOORE_OFFSETS = [(-1,-1),(-1,0),(-1,1),
@@ -254,7 +259,7 @@ class WildfireCA:
                  wind_bias:   np.ndarray | None = None,
                  wind_vector: np.ndarray | None = None):
         self.rows, self.cols = humidity.shape
-        assert vegetation.shape == humidity.shape, "Dimensions incompatibles"
+        assert vegetation.shape == humidity.shape, "Dimensions incompatibles (vegetació)"
         if relief is not None:
             assert relief.shape == humidity.shape, "Dimensions incompatibles (relleu)"
         if fuel is not None:
@@ -288,7 +293,7 @@ class WildfireCA:
         # ── Comptadors interns ───────────────────────────────────────
         # Temps que porta cada cel·la en estat BURNING (per calcular combustible)
         self._burn_timer = np.zeros((self.rows, self.cols), dtype=float)
-        # Temps que porta esperant (humitat) cada cel·la que ha rebut foc
+        # Temps que porta esperant (relacionat amb humitat) cada cel·la que ha rebut foc
         self._ignition_wait = np.full((self.rows, self.cols), -1.0)
 
         # ── Historial per a la visualització ─────────────────────────
@@ -326,11 +331,9 @@ class WildfireCA:
                                  c: int,
                                  burning_neighbors: list[tuple[int, int]]) -> float:
         """
-        Factor multiplicador de propagació amb vent direccional.
-
-        - Component espacial: wind_bias[r, c] (0..1)
-        - Component direccional: alineació entre direcció del vent i el vector
-          (veí cremant -> cel·la candidata)
+        Calcula el multiplicador de propagació degut al vent.
+        Combina la intensitat local (wind_bias) amb l'alineació entre 
+        l'avanç del foc i la direcció del vent.
         """
         if not burning_neighbors:
             return 1.0
@@ -345,27 +348,32 @@ class WildfireCA:
             vnorm = np.hypot(vx, vy)
             if vnorm == 0:
                 continue
+            
+            # Producte escalar (equival a cos(theta) perquè són unitaris)
+            # 1 = alineat, 0 = perpendicular, -1 = en contra
             ux, uy = vx / vnorm, vy / vnorm
-            align = ux * wx + uy * wy  # ja és cos(theta), perquè vectors unitaris
+            align = ux * wx + uy * wy
             alignments.append(float(align))
 
         if not alignments:
             return 1.0
 
-        # Reutilitzem la regla de majoria de la Part 1 per detectar "dominància"
+        # Reutilitzem la regla de majoria (Part 1) per detectar "dominància"
         # de propagació a favor del vent dins el veïnatge local.
         downwind_votes = [1 if a > 0 else 0 for a in alignments]
         downwind_majority = wolfram_majority(downwind_votes)
 
-        # max_align -> [-1, 1], el passem a [0, 1]
+        # Normalitzem la màxima alineació de [-1, 1] a [0, 1]
         max_align = max(alignments)
         directional_term = 0.5 * (max_align + 1.0)
 
-        # Si la majoria de veïns cremant venen a favor del vent, reforcem una mica.
+        # Si hi ha majoria de propagació a favor del vent, garantim un efecte mínim
         if downwind_majority == 1:
             directional_term = max(directional_term, 0.7)
 
         directional_term = min(1.0, max(0.0, directional_term))
+        
+        # Fórmula final: factor 1.0 (base) + benefici direccional escalat per la intensitat
         return 1.0 + self.wind_bias[r, c] * directional_term
 
     def _relief_factor(self,
@@ -398,7 +406,7 @@ class WildfireCA:
         """
         Avança el model un pas de temps dt (en hores).
 
-        Lògica de l'evolució (teoria.pdf, pp. 56-62):
+        Lògica de l'evolució:
         ─────────────────────────────────────────────
         1. UNBURNED  → comprova si algun veí és BURNING
              Si sí: inicia el comptador d'ignició (caldrà superar la humitat)
@@ -526,6 +534,8 @@ def plot_layers(humidity: np.ndarray,
     axes[1].set_title('E2: Vegetació (hores combustible)', fontsize=11)
     plt.colorbar(im1, ax=axes[1], label='hores')
 
+    # E3 és l'estat del foc (no mostrem la capa ja que només es veuria el punt de ignició inicial)
+
     im2 = axes[2].imshow(relief, cmap='terrain', interpolation='nearest')
     axes[2].set_title('E4: Relleu / elevació', fontsize=11)
     plt.colorbar(im2, ax=axes[2], label='m')
@@ -620,7 +630,7 @@ def plot_statistics(ca: WildfireCA):
     pct_burned = [b / total * 100 for b in burned]
     ax2.plot(times, pct_burned, color='#e84c0e', linewidth=2)
 
-    # Reutilització extra de la Part 1: coarse_grain de la sèrie de cel·les cremades.
+    # Reutilització de la Part 1: coarse_grain de la sèrie de cel·les cremades.
     burned_binary_matrix = np.array(
         [(s == BURNED).astype(int).ravel() for s in ca.history], dtype=int
     )
@@ -696,7 +706,8 @@ def plot_wind_diagnostics(ca: WildfireCA,
     gy = np.linspace(0, rows - 1, 8)
     xx, yy = np.meshgrid(gx, gy)
     u = np.full_like(xx, ca.wind_vector[0], dtype=float)
-    v = np.full_like(yy, -ca.wind_vector[1], dtype=float) # Invertim la Y visual per quadrar amb l'eix de la imatge
+    v = np.full_like(yy, -ca.wind_vector[1], dtype=float)
+    # 'quiver' dibuixa fletxes per representar un camp de vectors (aquí, la direcció del vent)
     ax1.quiver(xx, yy, u, v, color='black', alpha=0.75, scale=12)
 
     # ── 2) Pes direccional per a les 8 direccions de Moore ───────────
@@ -843,8 +854,7 @@ if __name__ == '__main__':
     DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 
     print("=" * 65)
-    print("  MODEL 3:2-CA^1 — PROPAGACIÓ D'INCENDI FORESTAL")
-    print("  Teoria: Fonseca i Casas (UPC), m:n-CA^k")
+    print("  MODEL 5:2-CA^1 — PROPAGACIÓ D'INCENDI FORESTAL")
     print("=" * 65)
 
     # ── 1. Càrrega de les capes raster IDRISI32 ──────────────────────
@@ -907,7 +917,7 @@ if __name__ == '__main__':
     print("    Guardat: wildfire_01_layers.png")
 
     # ── 4. Creació del CA i ignició ───────────────────────────────────
-    print("\n[4] Creant l'autòmat cel·lular 3:2-CA^1...")
+    print("\n[4] Creant l'autòmat cel·lular 5:2-CA^1...")
     ca = WildfireCA(
         humidity,
         vegetation,
@@ -945,14 +955,14 @@ if __name__ == '__main__':
                       dpi=150, bbox_inches='tight')
     print("    Guardat: wildfire_04_final.png")
 
-    # ── 8B. Diagnosi específica del vent ─────────────────────────────
+    # ── 9. Diagnosi específica del vent ─────────────────────────────
     if use_wind and wind_bias is not None:
         fig_wind = plot_wind_diagnostics(ca, wind_bias)
         fig_wind.savefig(os.path.join(OUTPUT_DIR, 'wildfire_05_wind_diagnostics.png'),
                          dpi=150, bbox_inches='tight')
         print("    Guardat: wildfire_05_wind_diagnostics.png")
 
-    # ── 8C. Comparació de múltiples tipus de vent (inclou sense vent) ──
+    # ── 10. Comparació de múltiples tipus de vent (inclou sense vent) ──
     print("\n[8C] Comparant escenaris: sense vent + vents direccionals...")
     scenario_results = run_wind_scenarios(
         humidity_orig,
@@ -968,7 +978,7 @@ if __name__ == '__main__':
                      dpi=150, bbox_inches='tight')
     print("    Guardat: wildfire_06_wind_scenarios.png")
 
-    # ── 9. Resum ──────────────────────────────────────────────────────
+    # ── 11. Resum ──────────────────────────────────────────────────────
     total_cells = ca.rows * ca.cols
     n_burned    = int(np.sum(ca.fire_state == BURNED))
     n_burning   = int(np.sum(ca.fire_state == BURNING))
@@ -978,7 +988,7 @@ if __name__ == '__main__':
     print("  RESUM FINAL DE LA SIMULACIÓ")
     print("=" * 65)
     print(f"  Temps total simulat : {ca.time:.1f} hores")
-    print(f"  Mida del raster     : {ca.rows} × {ca.cols} cel·les")
+    print(f"  Mida del raster     : {ca.rows} x {ca.cols} cel·les")
     print(f"  Cel·les totals      : {total_cells}")
     print(f"  Cel·les cremades    : {n_burned:4d}  "
           f"({n_burned/total_cells*100:.1f}%)")
